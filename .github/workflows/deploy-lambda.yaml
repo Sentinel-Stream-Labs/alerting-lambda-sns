@@ -1,0 +1,48 @@
+name: Deploy Fraud Alerting Lambda
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: us-east-1
+
+      - name: Package Lambda Function
+        run: |
+          mkdir -p lambda_package
+          cp src/fraud_alert_handler.py lambda_package/
+          cd lambda_package
+          pip install -r ../requirements.txt -t .
+          zip -r ../fraud_alert_handler.zip .
+          cd ..
+
+      - name: Upload Lambda Package to S3
+        run: |
+          BUCKET_NAME=$(aws cloudformation describe-stacks --stack-name sentinel-s3-stack --query "Stacks[0].Outputs[?OutputKey=='DataLakeBucketName'].OutputValue" --output text)
+          aws s3 cp fraud_alert_handler.zip s3://$BUCKET_NAME/lambda/fraud_alert_handler.zip
+
+      - name: Deploy Lambda Stack
+        uses: aws-actions/aws-cloudformation-github-deploy@v1
+        with:
+          name: sentinel-lambda-alerting-stack
+          template: templates/lambda-alerting-resources.json
+          no-fail-on-empty-changeset: "1"
+          capabilities: CAPABILITY_NAMED_IAM

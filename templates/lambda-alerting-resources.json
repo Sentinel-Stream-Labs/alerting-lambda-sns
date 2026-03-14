@@ -1,0 +1,170 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Lambda-based alerting service for Sentinel fraud detection pipeline",
+    "Parameters": {
+        "ProjectName": {
+            "Type": "String",
+            "Default": "sentinel-fraud-detection"
+        }
+    },
+    "Resources": {
+        "LambdaExecutionRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                },
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+                ],
+                "Policies": [
+                    {
+                        "PolicyName": "FraudAlertingPolicy",
+                        "PolicyDocument": {
+                            "Version": "2012-10-17",
+                            "Statement": [
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "s3:GetObject",
+                                        "s3:ListBucket"
+                                    ],
+                                    "Resource": [
+                                        {
+                                            "Fn::Sub": [
+                                                "arn:aws:s3:::${BucketName}",
+                                                {
+                                                    "BucketName": {
+                                                        "Fn::ImportValue": "Sentinel-DataLakeBucket"
+                                                    }
+                                                }
+                                            ]
+                                        },
+                                        {
+                                            "Fn::Sub": [
+                                                "arn:aws:s3:::${BucketName}/gold/*",
+                                                {
+                                                    "BucketName": {
+                                                        "Fn::ImportValue": "Sentinel-DataLakeBucket"
+                                                    }
+                                                }
+                                            ]
+                                        }
+                                    ]
+                                },
+                                {
+                                    "Effect": "Allow",
+                                    "Action": [
+                                        "sns:Publish"
+                                    ],
+                                    "Resource": {
+                                        "Fn::ImportValue": "Sentinel-FraudAlertsTopic"
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+        },
+        "FraudAlertingLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "FunctionName": "sentinel-fraud-alert-handler",
+                "Runtime": "python3.11",
+                "Handler": "fraud_alert_handler.lambda_handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "LambdaExecutionRole",
+                        "Arn"
+                    ]
+                },
+                "Timeout": 60,
+                "MemorySize": 512,
+                "Code": {
+                    "S3Bucket": {
+                        "Fn::Sub": [
+                            "${BucketName}",
+                            {
+                                "BucketName": {
+                                    "Fn::ImportValue": "Sentinel-DataLakeBucket"
+                                }
+                            }
+                        ]
+                    },
+                    "S3Key": "lambda/fraud_alert_handler.zip"
+                },
+                "Environment": {
+                    "Variables": {
+                        "SNS_TOPIC_ARN": {
+                            "Fn::ImportValue": "Sentinel-FraudAlertsTopic"
+                        }
+                    }
+                },
+                "Layers": [
+                    {
+                        "Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:pandas-layer:1"
+                    }
+                ],
+                "Tags": [
+                    {
+                        "Key": "Project",
+                        "Value": "Sentinel-Fraud-Detection"
+                    }
+                ]
+            }
+        },
+        "LambdaS3Permission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "FunctionName": {
+                    "Ref": "FraudAlertingLambda"
+                },
+                "Principal": "s3.amazonaws.com",
+                "Action": "lambda:InvokeFunction",
+                "SourceArn": {
+                    "Fn::Sub": [
+                        "arn:aws:s3:::${BucketName}",
+                        {
+                            "BucketName": {
+                                "Fn::ImportValue": "Sentinel-DataLakeBucket"
+                            }
+                        }
+                    ]
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "LambdaFunctionArn": {
+            "Value": {
+                "Fn::GetAtt": [
+                    "FraudAlertingLambda",
+                    "Arn"
+                ]
+            },
+            "Export": {
+                "Name": "Sentinel-FraudAlertingLambdaArn"
+            },
+            "Description": "ARN of fraud alerting Lambda function"
+        },
+        "LambdaFunctionName": {
+            "Value": {
+                "Ref": "FraudAlertingLambda"
+            },
+            "Export": {
+                "Name": "Sentinel-FraudAlertingLambdaName"
+            },
+            "Description": "Name of fraud alerting Lambda function"
+        }
+    }
+}
