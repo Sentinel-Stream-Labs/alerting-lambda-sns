@@ -6,6 +6,8 @@ Reads Gold layer transactions from S3 and publishes high-risk alerts to SNS
 import json
 import boto3
 import os
+import pandas as pd
+from io import BytesIO
 from datetime import datetime
 
 s3_client = boto3.client('s3')
@@ -33,19 +35,11 @@ def lambda_handler(event, context):
         
         print(f"Processing file: s3://{bucket}/{key}")
         
-        # Read file from S3
+        # Read Parquet file from S3
         try:
             obj = s3_client.get_object(Bucket=bucket, Key=key)
-            body = obj['Body'].read()
-            
-            # Try to parse as JSON Lines (one JSON object per line)
-            transactions = []
-            for line in body.decode('utf-8').split('\n'):
-                if line.strip():
-                    try:
-                        transactions.append(json.loads(line))
-                    except:
-                        pass
+            df = pd.read_parquet(BytesIO(obj['Body'].read()))
+            transactions = df.to_dict('records')
         except Exception as e:
             print(f"Error reading file: {str(e)}")
             return {
