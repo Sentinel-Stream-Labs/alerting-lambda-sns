@@ -6,9 +6,9 @@ Reads Gold layer transactions from S3 and publishes high-risk alerts to SNS
 import json
 import boto3
 import os
-import pandas as pd
 from io import BytesIO
 from datetime import datetime
+import pyarrow.parquet as pq
 
 s3_client = boto3.client('s3')
 sns_client = boto3.client('sns')
@@ -35,11 +35,11 @@ def lambda_handler(event, context):
         
         print(f"Processing file: s3://{bucket}/{key}")
         
-        # Read Parquet file from S3
+        # Read the Parquet file directly with pyarrow to keep the Lambda package small.
         try:
             obj = s3_client.get_object(Bucket=bucket, Key=key)
-            df = pd.read_parquet(BytesIO(obj['Body'].read()))
-            transactions = df.to_dict('records')
+            table = pq.read_table(BytesIO(obj['Body'].read()))
+            transactions = table.to_pylist()
         except Exception as e:
             print(f"Error reading file: {str(e)}")
             return {
@@ -86,11 +86,14 @@ def format_alert(transaction):
     if len(card) > 4:
         card = '*' * (len(card) - 4) + card[-4:]
     
+    total_spent = float(transaction.get('total_spent', 0) or 0)
+    avg_transaction_value = float(transaction.get('avg_transaction_value', 0) or 0)
+
     alert = f"""
-🚨 HIGH-RISK TRANSACTION DETECTED 🚨
+HIGH-RISK TRANSACTION DETECTED
 
 Card Number: {card}
-Amount: ${transaction.get('total_spent', 0):.2f}
+Amount: ${total_spent:.2f}
 Transaction Count (10min window): {transaction.get('transaction_count', 0)}
 Risk Level: {transaction.get('fraud_risk_flag', 'UNKNOWN')}
 
@@ -99,9 +102,9 @@ Terminal ID: {transaction.get('terminal_id', 'N/A')}
 
 Timestamp: {datetime.now().isoformat()}
 
-Average Transaction Value: ${transaction.get('avg_transaction_value', 0):.2f}
+Average Transaction Value: ${avg_transaction_value:.2f}
 
-⚠️ Please investigate immediately!
+Please investigate immediately.
 """
     return alert.strip()
 
@@ -111,7 +114,7 @@ def publish_alert(message):
     try:
         sns_client.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Subject='🚨 Sentinel: HIGH-RISK Fraud Transaction Alert',
+            Subject='Sentinel: HIGH-RISK Fraud Transaction Alert',
             Message=message
         )
         print(f"Alert published successfully")
