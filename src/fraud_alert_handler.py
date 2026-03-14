@@ -8,6 +8,7 @@ import boto3
 import os
 from io import BytesIO
 from datetime import datetime
+from urllib.parse import unquote_plus
 import pyarrow.parquet as pq
 
 s3_client = boto3.client('s3')
@@ -24,7 +25,7 @@ def lambda_handler(event, context):
     try:
         # Extract S3 bucket and key from event
         bucket = event['Records'][0]['s3']['bucket']['name']
-        key = event['Records'][0]['s3']['object']['key']
+        key = unquote_plus(event['Records'][0]['s3']['object']['key'])
         
         # Skip metadata and temporary files
         if key.startswith('_') or key.endswith('_SUCCESS'):
