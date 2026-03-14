@@ -5,20 +5,19 @@ Reads Gold layer transactions from S3 and publishes high-risk alerts to SNS
 
 import json
 import boto3
-import pandas as pd
+import os
 from datetime import datetime
-from io import BytesIO
 
 s3_client = boto3.client('s3')
 sns_client = boto3.client('sns')
 
-SNS_TOPIC_ARN = "arn:aws:sns:us-east-1:placeholder:sentinel-fraud-alerts"
+SNS_TOPIC_ARN = os.environ.get('SNS_TOPIC_ARN', '')
 
 
 def lambda_handler(event, context):
     """
     Lambda handler triggered by S3 events from Gold layer.
-    Processes parquet files and sends alerts for high-risk transactions.
+    Processes JSON/Parquet files and sends alerts for high-risk transactions.
     """
     try:
         # Extract S3 bucket and key from event
@@ -34,19 +33,33 @@ def lambda_handler(event, context):
         
         print(f"Processing file: s3://{bucket}/{key}")
         
-        # Read parquet file from S3
+        # Read file from S3
         try:
             obj = s3_client.get_object(Bucket=bucket, Key=key)
-            df = pd.read_parquet(BytesIO(obj['Body'].read()))
+            body = obj['Body'].read()
+            
+            # Try to parse as JSON Lines (one JSON object per line)
+            transactions = []
+            for line in body.decode('utf-8').split('\n'):
+                if line.strip():
+                    try:
+                        transactions.append(json.loads(line))
+                    except:
+                        pass
         except Exception as e:
-            # If parquet fails, try JSON
-            obj = s3_client.get_object(Bucket=bucket, Key=key)
-            df = pd.read_json(BytesIO(obj['Body'].read()), lines=True)
+            print(f"Error reading file: {str(e)}")
+            return {
+                'statusCode': 500,
+                'body': json.dumps(f'Error reading file: {str(e)}')
+            }
         
         # Filter for HIGH risk transactions
-        high_risk_df = df[df['fraud_risk_flag'] == 'HIGH']
+        high_risk_transactions = [
+            t for t in transactions 
+            if t.get('fraud_risk_flag') == 'HIGH'
+        ]
         
-        if len(high_risk_df) == 0:
+        if len(high_risk_transactions) == 0:
             return {
                 'statusCode': 200,
                 'body': json.dumps('No high-risk transactions found')
@@ -54,8 +67,8 @@ def lambda_handler(event, context):
         
         # Send alert for each high-risk transaction
         alert_count = 0
-        for _, row in high_risk_df.iterrows():
-            alert_message = format_alert(row)
+        for transaction in high_risk_transactions:
+            alert_message = format_alert(transaction)
             publish_alert(alert_message)
             alert_count += 1
         
@@ -74,23 +87,28 @@ def lambda_handler(event, context):
 
 def format_alert(transaction):
     """Format transaction into a readable alert message"""
+    card = transaction.get('card_number', 'N/A')
+    # Mask card number
+    if len(card) > 4:
+        card = '*' * (len(card) - 4) + card[-4:]
+    
     alert = f"""
-    🚨 HIGH-RISK TRANSACTION DETECTED 🚨
-    
-    Card Number: {transaction.get('card_number', 'N/A')}[-4:]
-    Amount: ${transaction.get('total_spent', 0):.2f}
-    Transaction Count (10min window): {transaction.get('transaction_count', 0)}
-    Risk Level: {transaction.get('fraud_risk_flag', 'UNKNOWN')}
-    
-    Location: {transaction.get('city', 'N/A')}
-    Terminal ID: {transaction.get('terminal_id', 'N/A')}
-    
-    Timestamp: {datetime.now().isoformat()}
-    
-    Average Transaction Value: ${transaction.get('avg_transaction_value', 0):.2f}
-    
-    ⚠️ Please investigate immediately!
-    """
+🚨 HIGH-RISK TRANSACTION DETECTED 🚨
+
+Card Number: {card}
+Amount: ${transaction.get('total_spent', 0):.2f}
+Transaction Count (10min window): {transaction.get('transaction_count', 0)}
+Risk Level: {transaction.get('fraud_risk_flag', 'UNKNOWN')}
+
+Location: {transaction.get('city', 'N/A')}
+Terminal ID: {transaction.get('terminal_id', 'N/A')}
+
+Timestamp: {datetime.now().isoformat()}
+
+Average Transaction Value: ${transaction.get('avg_transaction_value', 0):.2f}
+
+⚠️ Please investigate immediately!
+"""
     return alert.strip()
 
 
@@ -106,3 +124,4 @@ def publish_alert(message):
     except Exception as e:
         print(f"Failed to publish alert: {str(e)}")
         raise
+

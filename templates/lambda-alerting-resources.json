@@ -110,11 +110,6 @@
                         }
                     }
                 },
-                "Layers": [
-                    {
-                        "Fn::Sub": "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:layer:pandas-layer:1"
-                    }
-                ],
                 "Tags": [
                     {
                         "Key": "Project",
